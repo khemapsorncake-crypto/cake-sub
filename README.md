@@ -1,15 +1,18 @@
-# Cake Sub Server AI V3
+# Cake Sub Server AI V3.1
 
-หน้าเดียว ไม่มี Login ไม่มี Dashboard และไม่มีลายน้ำ
+หน้าเดียวสำหรับเลือกวิดีโอ ถอดเสียง แก้ซับ และสร้างวิดีโอพร้อมซับโดยไม่มีลายน้ำ
 
-## ตั้งค่า Vercel
-1. อัปไฟล์ทั้งหมดขึ้น GitHub
-2. Vercel > Project > Settings > Environment Variables
-3. เพิ่ม `GROQ_API_KEY`
-4. สร้างคีย์ฟรีจาก Groq Console แล้ววางเป็นค่า
-5. Redeploy
+## Vercel
 
-## การใช้งาน
-เลือกคลิป > AI สร้างซับ > แก้ข้อความ > ดาวน์โหลด SRT
+1. อัปโหลดไฟล์ทั้งหมดขึ้น GitHub
+2. Root Directory: `./`
+3. Build Command: `npm run build`
+4. Output Directory: ปล่อยว่าง
+5. เพิ่ม Environment Variable ชื่อ `GROQ_API_KEY`
+6. Redeploy
 
-หมายเหตุ: เพราะ Vercel จำกัด request 4.5 MB เวอร์ชันนี้แปลงวิดีโอเป็น WAV 16 kHz mono ก่อนส่ง และรองรับคลิปประมาณไม่เกิน 2 นาที 10 วินาทีต่อครั้ง
+## หมายเหตุ
+
+- รองรับคลิปไม่เกินประมาณ 2 นาที 10 วินาที
+- ปุ่มสร้างวิดีโอพร้อมซับรองรับ Chrome/Edge บนคอม
+- ไฟล์ผลลัพธ์เป็น WebM ไม่มีลายน้ำ

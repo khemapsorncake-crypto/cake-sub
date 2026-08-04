@@ -1,19 +1,31 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Download, LoaderCircle, Play, Sparkles, Trash2, Upload } from "lucide-react";
+import {
+  Check,
+  Download,
+  Film,
+  LoaderCircle,
+  Play,
+  Sparkles,
+  Trash2,
+  Upload,
+  WandSparkles,
+} from "lucide-react";
 
 type Subtitle = { id: string; start: number; end: number; text: string };
 type Segment = { start?: number; end?: number; text?: string };
+type CaptureVideo = HTMLVideoElement & { captureStream?: () => MediaStream };
 
 function clock(value: number) {
-  const minutes = Math.floor(value / 60).toString().padStart(2, "0");
-  const seconds = Math.floor(value % 60).toString().padStart(2, "0");
+  const safe = Math.max(0, Number(value) || 0);
+  const minutes = Math.floor(safe / 60).toString().padStart(2, "0");
+  const seconds = Math.floor(safe % 60).toString().padStart(2, "0");
   return `${minutes}:${seconds}`;
 }
 
 function srtTime(value: number) {
-  const safe = Math.max(0, value || 0);
+  const safe = Math.max(0, Number(value) || 0);
   const hours = Math.floor(safe / 3600).toString().padStart(2, "0");
   const minutes = Math.floor((safe % 3600) / 60).toString().padStart(2, "0");
   const seconds = Math.floor(safe % 60).toString().padStart(2, "0");
@@ -21,19 +33,38 @@ function srtTime(value: number) {
   return `${hours}:${minutes}:${seconds},${milliseconds}`;
 }
 
-async function videoToWav(file: File): Promise<Blob> {
-  const AudioContextClass = window.AudioContext ||
-    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (context.measureText(candidate).width > maxWidth && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = candidate;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.slice(0, 3);
+}
+
+async function videoToWav(file: File): Promise<{ blob: Blob; duration: number }> {
+  const AudioContextClass =
+    window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
   if (!AudioContextClass) throw new Error("เบราว์เซอร์นี้อ่านเสียงจากวิดีโอไม่ได้");
 
   const context = new AudioContextClass();
   try {
     const decoded = await context.decodeAudioData((await file.arrayBuffer()).slice(0));
     if (decoded.duration > 130) {
-      throw new Error("เวอร์ชัน Vercel รองรับคลิปไม่เกินประมาณ 2 นาที 10 วินาทีต่อครั้ง");
+      throw new Error("รองรับคลิปไม่เกินประมาณ 2 นาที 10 วินาทีต่อครั้ง");
     }
 
-    const sampleRate = 16000;
+    const sampleRate = 16_000;
     const length = Math.ceil(decoded.duration * sampleRate);
     const offline = new OfflineAudioContext(1, length, sampleRate);
     const source = offline.createBufferSource();
@@ -42,7 +73,9 @@ async function videoToWav(file: File): Promise<Blob> {
 
     for (let c = 0; c < decoded.numberOfChannels; c += 1) {
       const input = decoded.getChannelData(c);
-      for (let i = 0; i < input.length; i += 1) channel[i] += input[i] / decoded.numberOfChannels;
+      for (let i = 0; i < input.length; i += 1) {
+        channel[i] += input[i] / decoded.numberOfChannels;
+      }
     }
 
     source.buffer = mono;
@@ -53,8 +86,11 @@ async function videoToWav(file: File): Promise<Blob> {
     const buffer = new ArrayBuffer(44 + samples.length * 2);
     const view = new DataView(buffer);
     const write = (offset: number, text: string) => {
-      for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+      for (let i = 0; i < text.length; i += 1) {
+        view.setUint8(offset + i, text.charCodeAt(i));
+      }
     };
+
     write(0, "RIFF");
     view.setUint32(4, 36 + samples.length * 2, true);
     write(8, "WAVE");
@@ -68,13 +104,22 @@ async function videoToWav(file: File): Promise<Blob> {
     view.setUint16(34, 16, true);
     write(36, "data");
     view.setUint32(40, samples.length * 2, true);
+
     let offset = 44;
     for (const sample of samples) {
       const clamped = Math.max(-1, Math.min(1, sample));
-      view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+      view.setInt16(
+        offset,
+        clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff,
+        true,
+      );
       offset += 2;
     }
-    return new Blob([buffer], { type: "audio/wav" });
+
+    return {
+      blob: new Blob([buffer], { type: "audio/wav" }),
+      duration: decoded.duration,
+    };
   } finally {
     await context.close();
   }
@@ -91,90 +136,332 @@ export default function Home() {
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  const [rendering, setRendering] = useState(false);
+  const [renderProgress, setRenderProgress] = useState(0);
 
-  useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current); }, []);
-  const active = useMemo(() => subtitles.find((s) => currentTime >= s.start && currentTime < s.end), [currentTime, subtitles]);
+  useEffect(() => () => {
+    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+  }, []);
+
+  const active = useMemo(
+    () => subtitles.find((s) => currentTime >= s.start && currentTime < s.end),
+    [currentTime, subtitles],
+  );
 
   function selectVideo(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0];
     if (!selected) return;
-    if (!selected.type.startsWith("video/")) return setError("กรุณาเลือกไฟล์วิดีโอ");
+    if (!selected.type.startsWith("video/")) {
+      setError("กรุณาเลือกไฟล์วิดีโอ MP4 หรือ MOV");
+      return;
+    }
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
     const url = URL.createObjectURL(selected);
     urlRef.current = url;
-    setFile(selected); setVideoUrl(url); setSubtitles([]); setError(""); setProgress(0); setStatus("");
+    setFile(selected);
+    setVideoUrl(url);
+    setSubtitles([]);
+    setError("");
+    setProgress(0);
+    setStatus("");
+    setRenderProgress(0);
   }
 
   async function generate() {
     if (!file || status) return;
+    let timer = 0;
     try {
-      setError(""); setStatus("กำลังแยกเสียงจากคลิป"); setProgress(15);
-      const wav = await videoToWav(file);
-      setStatus("กำลังส่งเสียงไปให้ Whisper Large V3"); setProgress(45);
-      const form = new FormData(); form.append("audio", wav, "cake-sub.wav");
-      const timer = window.setInterval(() => setProgress((p) => Math.min(92, p + 2)), 700);
-      const response = await fetch("/api/transcribe", { method: "POST", body: form });
+      setError("");
+      setStatus("กำลังอ่านเสียงทั้งคลิป");
+      setProgress(12);
+      const { blob, duration } = await videoToWav(file);
+
+      setStatus("AI กำลังถอดเสียง");
+      setProgress(38);
+      const form = new FormData();
+      form.append("audio", blob, "cake-sub.wav");
+      form.append("duration", String(duration));
+
+      timer = window.setInterval(() => {
+        setProgress((p) => Math.min(91, p + 1));
+      }, 900);
+
+      const response = await fetch("/api/transcribe", {
+        method: "POST",
+        body: form,
+      });
       window.clearInterval(timer);
-      const data = await response.json();
+
+      const contentType = response.headers.get("content-type") || "";
+      const raw = await response.text();
+      if (!contentType.includes("application/json")) {
+        throw new Error("API ยังไม่พร้อมใช้งาน กรุณาตรวจ Deployment ล่าสุดของ Vercel");
+      }
+      const data = raw ? JSON.parse(raw) : {};
       if (!response.ok) throw new Error(data.error || "สร้างซับไม่สำเร็จ");
-      setProgress(96); setStatus("กำลังจัดช่วงเวลา");
+
+      setProgress(96);
+      setStatus("กำลังจัดช่วงเวลา");
       const segments: Segment[] = Array.isArray(data.segments) ? data.segments : [];
       const next = segments
         .map((segment, index) => ({
           id: `${Date.now()}-${index}`,
-          start: Number(segment.start || 0),
-          end: Math.max(Number(segment.end || 0), Number(segment.start || 0) + 0.5),
+          start: Math.max(0, Number(segment.start || 0)),
+          end: Math.max(Number(segment.end || 0), Number(segment.start || 0) + 0.45),
           text: String(segment.text || "").trim(),
         }))
         .filter((item) => item.text);
-      if (!next.length && data.text) next.push({ id: `${Date.now()}-0`, start: 0, end: 5, text: data.text.trim() });
-      setSubtitles(next); setProgress(100); setStatus("");
+
+      if (!next.length) {
+        throw new Error("AI ไม่พบเสียงพูดที่ชัดเจนในคลิปนี้");
+      }
+
+      setSubtitles(next);
+      setProgress(100);
+      setStatus("");
     } catch (caught) {
-      setStatus(""); setProgress(0); setError(caught instanceof Error ? caught.message : "สร้างซับไม่สำเร็จ");
+      if (timer) window.clearInterval(timer);
+      setStatus("");
+      setProgress(0);
+      setError(caught instanceof Error ? caught.message : "สร้างซับไม่สำเร็จ");
     }
   }
 
   function downloadSrt() {
-    const body = subtitles.map((s, i) => `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n${s.text}\n`).join("\n");
-    const url = URL.createObjectURL(new Blob([body], { type: "text/plain;charset=utf-8" }));
-    const a = document.createElement("a"); a.href = url; a.download = `${file?.name.replace(/\.[^.]+$/, "") || "cake-sub"}.srt`; a.click(); URL.revokeObjectURL(url);
+    const body = subtitles
+      .map(
+        (s, i) =>
+          `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n${s.text}\n`,
+      )
+      .join("\n");
+    const url = URL.createObjectURL(
+      new Blob([body], { type: "text/plain;charset=utf-8" }),
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${file?.name.replace(/\.[^.]+$/, "") || "cake-sub"}.srt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function renderVideo() {
+    const video = videoRef.current as CaptureVideo | null;
+    if (!video || !file || !subtitles.length || rendering) return;
+    if (!video.captureStream || typeof MediaRecorder === "undefined") {
+      setError("การสร้างวิดีโอต้องเปิดด้วย Chrome หรือ Edge บนคอม");
+      return;
+    }
+
+    setError("");
+    setRendering(true);
+    setRenderProgress(0);
+
+    const originalTime = video.currentTime;
+    const originalMuted = video.muted;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth || 720;
+    canvas.height = video.videoHeight || 1280;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      setRendering(false);
+      setError("สร้างพื้นที่วิดีโอไม่สำเร็จ");
+      return;
+    }
+
+    const sourceStream = video.captureStream();
+    const canvasStream = canvas.captureStream(30);
+    const outputStream = new MediaStream([
+      ...canvasStream.getVideoTracks(),
+      ...sourceStream.getAudioTracks(),
+    ]);
+
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+      ? "video/webm;codecs=vp9,opus"
+      : "video/webm";
+    const recorder = new MediaRecorder(outputStream, {
+      mimeType,
+      videoBitsPerSecond: 5_000_000,
+    });
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size) chunks.push(event.data);
+    };
+
+    const result = new Promise<Blob>((resolve, reject) => {
+      recorder.onerror = () => reject(new Error("สร้างวิดีโอไม่สำเร็จ"));
+      recorder.onstop = () => resolve(new Blob(chunks, { type: "video/webm" }));
+    });
+
+    function draw() {
+      if (!video || !context) return;
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const subtitle = subtitles.find(
+        (item) => video.currentTime >= item.start && video.currentTime < item.end,
+      );
+      if (subtitle) {
+        const fontSize = Math.max(30, Math.round(canvas.width * 0.055));
+        context.font = `900 ${fontSize}px Arial, sans-serif`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.lineJoin = "round";
+        const lines = wrapText(context, subtitle.text, canvas.width * 0.86);
+        const lineHeight = fontSize * 1.22;
+        const startY = canvas.height * 0.78 - ((lines.length - 1) * lineHeight) / 2;
+        lines.forEach((line, index) => {
+          const y = startY + index * lineHeight;
+          context.strokeStyle = "rgba(0,0,0,.95)";
+          context.lineWidth = Math.max(6, fontSize * 0.18);
+          context.strokeText(line, canvas.width / 2, y);
+          context.fillStyle = "#ffffff";
+          context.fillText(line, canvas.width / 2, y);
+        });
+      }
+      setRenderProgress(
+        Math.min(99, Math.round((video.currentTime / Math.max(video.duration, 1)) * 100)),
+      );
+      if (!video.ended && rendering) requestAnimationFrame(draw);
+    }
+
+    try {
+      video.pause();
+      video.currentTime = 0;
+      video.muted = false;
+      await new Promise<void>((resolve) => {
+        if (video.readyState >= 2) resolve();
+        else video.addEventListener("canplay", () => resolve(), { once: true });
+      });
+
+      recorder.start(1000);
+      await video.play();
+      requestAnimationFrame(draw);
+      await new Promise<void>((resolve) => {
+        video.addEventListener("ended", () => resolve(), { once: true });
+      });
+      recorder.stop();
+      const blob = await result;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${file.name.replace(/\.[^.]+$/, "")}-with-subtitles.webm`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      setRenderProgress(100);
+    } catch (caught) {
+      if (recorder.state !== "inactive") recorder.stop();
+      setError(caught instanceof Error ? caught.message : "สร้างวิดีโอไม่สำเร็จ");
+    } finally {
+      video.pause();
+      video.currentTime = originalTime;
+      video.muted = originalMuted;
+      setRendering(false);
+    }
   }
 
   return (
-    <main className="page-shell">
-      <section className="hero-card">
-        <div className="brand"><span className="brand-icon">🍰</span><div><h1>Cake Sub</h1><p>AI ทำซับอัตโนมัติ ไม่มีลายน้ำ</p></div></div>
-        <input ref={inputRef} type="file" accept="video/*" hidden onChange={selectVideo} />
-        {!file ? (
-          <button className="upload-box" onClick={() => inputRef.current?.click()}><Upload size={28}/><strong>เลือกวิดีโอ</strong><span>MP4 หรือ MOV</span></button>
-        ) : (
-          <div className="workspace">
-            <div className="video-panel">
-              <div className="video-frame">
-                <video ref={videoRef} src={videoUrl} controls onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)} />
-                {active && <div className="subtitle-preview">{active.text}</div>}
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="logo-mark">🍰</div>
+        <div>
+          <h1>Cake Sub</h1>
+          <p>ทำซับอัตโนมัติ แล้วใส่ลงคลิปทันที</p>
+        </div>
+      </header>
+
+      <input ref={inputRef} type="file" accept="video/*" hidden onChange={selectVideo} />
+
+      {!file ? (
+        <section className="start-card">
+          <div className="start-icon"><Film size={34} /></div>
+          <h2>เริ่มจากเลือกวิดีโอ</h2>
+          <p>รองรับ MP4 และ MOV · คลิปไม่เกินประมาณ 2 นาที 10 วินาที</p>
+          <button className="main-button" onClick={() => inputRef.current?.click()}>
+            <Upload size={20} /> เลือกวิดีโอ
+          </button>
+        </section>
+      ) : (
+        <section className="work-grid">
+          <div className="left-column">
+            <div className="video-card">
+              <div className="video-stage">
+                <video
+                  ref={videoRef}
+                  src={videoUrl}
+                  controls
+                  playsInline
+                  onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+                />
+                {active && <div className="live-subtitle">{active.text}</div>}
               </div>
-              <div className="file-row"><span>{file.name}</span><button className="ghost-button" onClick={() => inputRef.current?.click()}>เปลี่ยนคลิป</button></div>
-              <button className="primary-button" disabled={Boolean(status)} onClick={generate}>{status ? <LoaderCircle className="spin"/> : <Sparkles/>}{status || "AI สร้างซับ"}</button>
-              {status && <div className="progress-wrap"><div className="progress-track"><div className="progress-fill" style={{width:`${progress}%`}}/></div><span>{progress}%</span></div>}
-              {error && <div className="error-box">{error}</div>}
-            </div>
-            <div className="editor-panel">
-              <div className="panel-title"><div><h2>ข้อความซับ</h2><p>{subtitles.length ? `${subtitles.length} ช่วง` : "กด AI สร้างซับก่อน"}</p></div>{subtitles.length > 0 && <button className="download-button" onClick={downloadSrt}><Download size={18}/>ดาวน์โหลด SRT</button>}</div>
-              <div className="subtitle-list">
-                {subtitles.length === 0 ? <div className="empty-state"><Sparkles size={30}/><p>ซับที่ AI สร้างจะปรากฏตรงนี้</p></div> : subtitles.map((subtitle) => (
-                  <div className="subtitle-card" key={subtitle.id}>
-                    <button className="play-button" onClick={() => { if(videoRef.current){videoRef.current.currentTime=subtitle.start; void videoRef.current.play();}}}><Play size={16}/></button>
-                    <div className="subtitle-fields"><div className="time-row"><label>เริ่ม<input type="number" step="0.1" value={subtitle.start} onChange={(e)=>setSubtitles((all)=>all.map((s)=>s.id===subtitle.id?{...s,start:Number(e.target.value)}:s))}/></label><label>จบ<input type="number" step="0.1" value={subtitle.end} onChange={(e)=>setSubtitles((all)=>all.map((s)=>s.id===subtitle.id?{...s,end:Number(e.target.value)}:s))}/></label><span>{clock(subtitle.start)}</span></div><textarea value={subtitle.text} onChange={(e)=>setSubtitles((all)=>all.map((s)=>s.id===subtitle.id?{...s,text:e.target.value}:s))}/></div>
-                    <button className="delete-button" onClick={()=>setSubtitles((all)=>all.filter((s)=>s.id!==subtitle.id))}><Trash2 size={17}/></button>
-                  </div>
-                ))}
+              <div className="file-line">
+                <span title={file.name}>{file.name}</span>
+                <button onClick={() => inputRef.current?.click()}>เปลี่ยนคลิป</button>
               </div>
-              {subtitles.length > 0 && <div className="success-row"><CheckCircle2 size={18}/>แก้คำได้ก่อนดาวน์โหลด</div>}
             </div>
+
+            <button className="main-button full" disabled={Boolean(status)} onClick={generate}>
+              {status ? <LoaderCircle className="spin" size={20} /> : <Sparkles size={20} />}
+              {status || "AI สร้างซับทั้งคลิป"}
+            </button>
+
+            {status && (
+              <div className="progress-card">
+                <div><span>{status}</span><b>{progress}%</b></div>
+                <div className="progress-track"><i style={{ width: `${progress}%` }} /></div>
+              </div>
+            )}
+            {error && <div className="error-message">{error}</div>}
           </div>
-        )}
-      </section>
+
+          <div className="editor-card">
+            <div className="editor-head">
+              <div>
+                <h2>ข้อความซับ</h2>
+                <p>{subtitles.length ? `${subtitles.length} ช่วง · แตะเพื่อแก้ได้` : "กด AI สร้างซับก่อน"}</p>
+              </div>
+              {subtitles.length > 0 && <span className="ready-badge"><Check size={14} /> พร้อมแก้</span>}
+            </div>
+
+            <div className="subtitle-list">
+              {!subtitles.length ? (
+                <div className="empty-editor"><WandSparkles size={28} /><p>ซับที่สร้างจะอยู่ตรงนี้</p></div>
+              ) : (
+                subtitles.map((subtitle) => (
+                  <article className="subtitle-item" key={subtitle.id}>
+                    <button
+                      className="play-item"
+                      onClick={() => {
+                        if (videoRef.current) {
+                          videoRef.current.currentTime = subtitle.start;
+                          void videoRef.current.play();
+                        }
+                      }}
+                    ><Play size={15} /></button>
+                    <div className="subtitle-body">
+                      <div className="time-fields">
+                        <label>เริ่ม<input type="number" step="0.1" value={subtitle.start} onChange={(e) => setSubtitles((all) => all.map((s) => s.id === subtitle.id ? { ...s, start: Number(e.target.value) } : s))} /></label>
+                        <label>จบ<input type="number" step="0.1" value={subtitle.end} onChange={(e) => setSubtitles((all) => all.map((s) => s.id === subtitle.id ? { ...s, end: Number(e.target.value) } : s))} /></label>
+                        <span>{clock(subtitle.start)}</span>
+                      </div>
+                      <textarea value={subtitle.text} onChange={(e) => setSubtitles((all) => all.map((s) => s.id === subtitle.id ? { ...s, text: e.target.value } : s))} />
+                    </div>
+                    <button className="delete-item" onClick={() => setSubtitles((all) => all.filter((s) => s.id !== subtitle.id))}><Trash2 size={16} /></button>
+                  </article>
+                ))
+              )}
+            </div>
+
+            {subtitles.length > 0 && (
+              <div className="export-row">
+                <button className="light-button" onClick={downloadSrt}><Download size={18} /> ดาวน์โหลด SRT</button>
+                <button className="export-button" disabled={rendering} onClick={renderVideo}>
+                  {rendering ? <LoaderCircle className="spin" size={18} /> : <Film size={18} />}
+                  {rendering ? `กำลังสร้างคลิป ${renderProgress}%` : "สร้างวิดีโอพร้อมซับ"}
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
     </main>
   );
 }

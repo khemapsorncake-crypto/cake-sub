@@ -1,0 +1,9 @@
+{
+  "name": "Cake Sub",
+  "short_name": "Cake Sub",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f5ff",
+  "theme_color": "#8b5cf6",
+  "icons": []
+}

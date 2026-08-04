@@ -58,7 +58,6 @@ export async function POST(request: Request) {
     form.append("file", audio, "cake-sub.wav");
     form.append("model", "whisper-large-v3");
     form.append("language", "th");
-    form.append("task", "transcribe");
     form.append("response_format", "verbose_json");
     form.append("temperature", "0");
     form.append("timestamp_granularities[]", "segment");

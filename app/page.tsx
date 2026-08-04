@@ -39,15 +39,15 @@ type WhisperChunk = {
 
 const MODEL_OPTIONS = {
   accurate: {
-    id: "onnx-community/whisper-small",
-    label: "แม่นยำสูง",
-    description: "Whisper Small · แนะนำสำหรับคอม RAM 8 GB ขึ้นไป",
+    id: "onnx-community/whisper-base",
+    label: "แนะนำ · เสถียร",
+    description: "Whisper Base · ฟังทั้งคลิปครั้งเดียว เหมาะกับเว็บบนคอม",
     dtype: "q8",
   },
   maximum: {
-    id: "onnx-community/whisper-medium",
-    label: "แม่นสุด (ทดลอง)",
-    description: "Whisper Medium · แนะนำ RAM 16 GB และ Chrome/Edge รุ่นใหม่",
+    id: "onnx-community/whisper-tiny",
+    label: "เร็ว",
+    description: "Whisper Tiny · ใช้เมื่อคลิปยาวหรือเครื่องเริ่มค้าง",
     dtype: "q8",
   },
 } as const;
@@ -267,21 +267,31 @@ export default function Home() {
           },
         );
       } catch (modelError) {
-        if (quality !== "maximum") throw modelError;
-        setProgress({ label: "Medium ใช้หน่วยความจำเกิน กำลังสลับเป็น Small", percent: 18 });
+        if (quality === "maximum") throw modelError;
+        setProgress({ label: "Base โหลดไม่สำเร็จ กำลังสลับเป็น Tiny", percent: 18 });
         transcriber = await pipeline(
           "automatic-speech-recognition",
-          MODEL_OPTIONS.accurate.id,
+          MODEL_OPTIONS.maximum.id,
           {
-            dtype: MODEL_OPTIONS.accurate.dtype,
+            dtype: MODEL_OPTIONS.maximum.dtype,
             device,
           },
         );
       }
 
       setProgress({ label: "AI กำลังฟังคลิปทั้งคลิป", percent: 70 });
+      let fakePercent = 70;
+      const progressTimer = window.setInterval(() => {
+        fakePercent = Math.min(89, fakePercent + 1);
+        setProgress({
+          label: `AI กำลังฟังคลิปทั้งคลิป (${fakePercent}%)`,
+          percent: fakePercent,
+        });
+      }, 2500);
 
-      const rawResult = await transcriber(audio, {
+      let rawResult;
+      try {
+        rawResult = await transcriber(audio, {
         language: "thai",
         task: "transcribe",
         return_timestamps: true,
@@ -293,6 +303,9 @@ export default function Home() {
         chunk_length_s: 30,
         stride_length_s: 5,
       });
+      } finally {
+        window.clearInterval(progressTimer);
+      }
 
       const result = rawResult as unknown as {
         text?: string;

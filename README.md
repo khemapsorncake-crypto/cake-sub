@@ -1,26 +1,35 @@
-# Cake Sub V2.1
+# Cake Sub Browser AI V2.2
 
-เวอร์ชันนี้เพิ่ม AI ถอดเสียงภาษาไทยอัตโนมัติ พร้อมสร้างซับตามช่วงเวลา แก้ข้อความ ดูตัวอย่าง และดาวน์โหลด SRT
+เว็บสร้างซับภาษาไทยอัตโนมัติในเบราว์เซอร์ โดยใช้ Transformers.js + Whisper ไม่ต้องใช้ API Key
 
-## ติดตั้ง
+## วิธีติดตั้ง
 
 ```bash
 npm install
 npm run dev
 ```
 
-## ตั้งค่า OpenAI API Key
+เปิด `http://localhost:3000`
 
-สร้างไฟล์ `.env.local`
+## Deploy บน Vercel
 
-```env
-OPENAI_API_KEY=ใส่คีย์ของคุณ
-```
+- Framework Preset: Next.js
+- Root Directory: ปล่อยว่าง หรือ `./`
+- Build Command: `npm run build`
+- Output Directory: ปล่อยว่าง (Vercel ตรวจจับเอง)
+- ไม่ต้องเพิ่ม Environment Variables
 
-บน Vercel ไปที่ **Project Settings → Environment Variables** แล้วเพิ่มชื่อ `OPENAI_API_KEY` จากนั้น Redeploy
+## วิธีใช้งาน
 
-## ข้อจำกัดของชุดนี้
+1. เลือกวิดีโอ MP4/MOV
+2. กด AI สร้างซับอัตโนมัติ
+3. ครั้งแรกเบราว์เซอร์จะดาวน์โหลดโมเดล Whisper
+4. ตรวจและแก้ข้อความ/เวลา
+5. ดาวน์โหลด SRT
 
-- รองรับคลิปไม่เกิน 4 MB เพื่อให้ผ่านการอัปโหลดบน Vercel แบบเริ่มต้น
-- ยังไม่ฝังซับกลับลง MP4 โดยตรง
-- ขั้นถัดไปควรเพิ่ม object storage และ worker สำหรับคลิปขนาดใหญ่/การ render
+## ข้อจำกัดของรุ่นนี้
+
+- แนะนำให้เริ่มจากคลิป 15–60 วินาที
+- มือถือ RAM น้อยอาจประมวลผลช้า หรือหน้าเว็บอาจรีโหลด
+- ความสามารถถอดเสียงจากไฟล์ MP4/MOV ขึ้นกับ codec ที่เบราว์เซอร์รองรับ
+- ยังไม่ได้ฝังซับลง MP4 โดยตรง

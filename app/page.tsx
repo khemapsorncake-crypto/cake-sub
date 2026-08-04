@@ -127,6 +127,12 @@ export default function Home() {
   const [error, setError] = useState("");
   const [rendering, setRendering] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
+  const [fontFamily, setFontFamily] = useState("Arial");
+  const [fontSize, setFontSize] = useState(34);
+  const [textColor, setTextColor] = useState("#ffffff");
+  const [strokeColor, setStrokeColor] = useState("#111111");
+  const [strokeWidth, setStrokeWidth] = useState(5);
+  const [subtitlePosition, setSubtitlePosition] = useState(78);
 
   useEffect(() => () => {
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
@@ -265,17 +271,17 @@ export default function Home() {
           context.drawImage(video, 0, 0, canvas.width, canvas.height);
           const subtitle = subtitles.find((s) => video.currentTime >= s.start && video.currentTime < s.end);
           if (subtitle) {
-            const fontSize = Math.max(30, Math.round(canvas.width * 0.055));
-            context.font = `900 ${fontSize}px Arial, sans-serif`;
+            const renderFontSize = Math.max(18, Math.round((fontSize / 390) * canvas.width));
+            context.font = `900 ${renderFontSize}px "${fontFamily}", Arial, sans-serif`;
             context.textAlign = "center";
             context.textBaseline = "middle";
             context.lineJoin = "round";
-            context.lineWidth = Math.max(5, fontSize * 0.16);
-            context.strokeStyle = "#111";
-            context.fillStyle = "#fff";
+            context.lineWidth = Math.max(1, (strokeWidth / 390) * canvas.width);
+            context.strokeStyle = strokeColor;
+            context.fillStyle = textColor;
             const lines = wrapText(context, subtitle.text, canvas.width * 0.82);
-            const lineHeight = fontSize * 1.22;
-            const baseY = canvas.height * 0.78 - ((lines.length - 1) * lineHeight) / 2;
+            const lineHeight = renderFontSize * 1.22;
+            const baseY = canvas.height * (subtitlePosition / 100) - ((lines.length - 1) * lineHeight) / 2;
             lines.forEach((line, index) => {
               const y = baseY + index * lineHeight;
               context.strokeText(line, canvas.width / 2, y);
@@ -327,7 +333,7 @@ export default function Home() {
         <div className="video-column">
           <div className="phone-frame">
             {videoUrl ? (
-              <><video ref={videoRef} src={videoUrl} controls onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}/>{active && <div className="subtitle-preview">{active.text}</div>}</>
+              <><video ref={videoRef} src={videoUrl} controls onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}/>{active && <div className="subtitle-preview" style={{fontFamily: `"${fontFamily}", Arial, sans-serif`, fontSize: `${fontSize}px`, color: textColor, WebkitTextStroke: `${Math.max(0, strokeWidth / 2)}px ${strokeColor}`, bottom: `${100 - subtitlePosition}%`}}>{active.text}</div>}</>
             ) : (
               <div className="empty-video"><Video size={38}/><b>ยังไม่ได้เลือกคลิป</b><span>รองรับ MP4 และ MOV</span></div>
             )}
@@ -340,6 +346,17 @@ export default function Home() {
 
         <div className="panel">
           <div className="section-title"><div><h3>ข้อความซับ</h3><p>กดเล่นแต่ละช่วงเพื่อตรวจและแก้คำ</p></div><span>{subtitles.length} ช่วง</span></div>
+          <div className="style-panel">
+            <div className="style-panel-head"><div><b>รูปแบบซับ</b><span>พรีวิวเปลี่ยนทันที</span></div><button type="button" className="reset-style" onClick={() => { setFontFamily("Arial"); setFontSize(34); setTextColor("#ffffff"); setStrokeColor("#111111"); setStrokeWidth(5); setSubtitlePosition(78); }}>คืนค่าเริ่มต้น</button></div>
+            <div className="style-grid">
+              <label>ฟอนต์<select value={fontFamily} onChange={(e) => setFontFamily(e.target.value)}><option value="Arial">Arial</option><option value="Tahoma">Tahoma</option><option value="Leelawadee UI">Leelawadee UI</option><option value="Noto Sans Thai">Noto Sans Thai</option><option value="sans-serif">Sans Serif</option></select></label>
+              <label>ขนาด <span>{fontSize}px</span><input type="range" min="20" max="64" value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))}/></label>
+              <label>สีตัวอักษร<input type="color" value={textColor} onChange={(e) => setTextColor(e.target.value)}/></label>
+              <label>สีขอบ<input type="color" value={strokeColor} onChange={(e) => setStrokeColor(e.target.value)}/></label>
+              <label>ความหนาขอบ <span>{strokeWidth}px</span><input type="range" min="0" max="12" value={strokeWidth} onChange={(e) => setStrokeWidth(Number(e.target.value))}/></label>
+              <label>ตำแหน่ง <span>{subtitlePosition}%</span><input type="range" min="55" max="90" value={subtitlePosition} onChange={(e) => setSubtitlePosition(Number(e.target.value))}/></label>
+            </div>
+          </div>
           {subtitles.length === 0 ? (
             <div className="empty-list"><Sparkles size={34}/><b>ซับจะปรากฏตรงนี้</b><p>เลือกคลิปแล้วกด AI สร้างซับ</p></div>
           ) : (

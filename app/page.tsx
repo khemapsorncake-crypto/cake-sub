@@ -2,7 +2,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Check,
+  CheckCircle2,
   Download,
   Film,
   LoaderCircle,
@@ -10,7 +10,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
-  WandSparkles,
+  Video,
 } from "lucide-react";
 
 type Subtitle = { id: string; start: number; end: number; text: string };
@@ -51,10 +51,8 @@ function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: num
 }
 
 async function videoToWav(file: File): Promise<{ blob: Blob; duration: number }> {
-  const AudioContextClass =
-    window.AudioContext ||
-    (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-      .webkitAudioContext;
+  const AudioContextClass = window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextClass) throw new Error("เบราว์เซอร์นี้อ่านเสียงจากวิดีโอไม่ได้");
 
   const context = new AudioContextClass();
@@ -86,9 +84,7 @@ async function videoToWav(file: File): Promise<{ blob: Blob; duration: number }>
     const buffer = new ArrayBuffer(44 + samples.length * 2);
     const view = new DataView(buffer);
     const write = (offset: number, text: string) => {
-      for (let i = 0; i < text.length; i += 1) {
-        view.setUint8(offset + i, text.charCodeAt(i));
-      }
+      for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
     };
 
     write(0, "RIFF");
@@ -108,18 +104,11 @@ async function videoToWav(file: File): Promise<{ blob: Blob; duration: number }>
     let offset = 44;
     for (const sample of samples) {
       const clamped = Math.max(-1, Math.min(1, sample));
-      view.setInt16(
-        offset,
-        clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff,
-        true,
-      );
+      view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
       offset += 2;
     }
 
-    return {
-      blob: new Blob([buffer], { type: "audio/wav" }),
-      duration: decoded.duration,
-    };
+    return { blob: new Blob([buffer], { type: "audio/wav" }), duration: decoded.duration };
   } finally {
     await context.close();
   }
@@ -176,20 +165,14 @@ export default function Home() {
       setProgress(12);
       const { blob, duration } = await videoToWav(file);
 
-      setStatus("AI กำลังถอดเสียง");
+      setStatus("AI กำลังถอดเสียงตามที่ได้ยิน");
       setProgress(38);
       const form = new FormData();
       form.append("audio", blob, "cake-sub.wav");
       form.append("duration", String(duration));
 
-      timer = window.setInterval(() => {
-        setProgress((p) => Math.min(91, p + 1));
-      }, 900);
-
-      const response = await fetch("/api/transcribe", {
-        method: "POST",
-        body: form,
-      });
+      timer = window.setInterval(() => setProgress((p) => Math.min(91, p + 1)), 900);
+      const response = await fetch("/api/transcribe", { method: "POST", body: form });
       window.clearInterval(timer);
 
       const contentType = response.headers.get("content-type") || "";
@@ -207,15 +190,12 @@ export default function Home() {
         .map((segment, index) => ({
           id: `${Date.now()}-${index}`,
           start: Math.max(0, Number(segment.start || 0)),
-          end: Math.max(Number(segment.end || 0), Number(segment.start || 0) + 0.45),
+          end: Math.max(Number(segment.end || 0), Number(segment.start || 0) + 0.35),
           text: String(segment.text || "").trim(),
         }))
         .filter((item) => item.text);
 
-      if (!next.length) {
-        throw new Error("AI ไม่พบเสียงพูดที่ชัดเจนในคลิปนี้");
-      }
-
+      if (!next.length) throw new Error("AI ไม่พบเสียงพูดที่ชัดเจนในคลิปนี้");
       setSubtitles(next);
       setProgress(100);
       setStatus("");
@@ -229,14 +209,9 @@ export default function Home() {
 
   function downloadSrt() {
     const body = subtitles
-      .map(
-        (s, i) =>
-          `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n${s.text}\n`,
-      )
+      .map((s, i) => `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n${s.text}\n`)
       .join("\n");
-    const url = URL.createObjectURL(
-      new Blob([body], { type: "text/plain;charset=utf-8" }),
-    );
+    const url = URL.createObjectURL(new Blob([body], { type: "text/plain;charset=utf-8" }));
     const a = document.createElement("a");
     a.href = url;
     a.download = `${file?.name.replace(/\.[^.]+$/, "") || "cake-sub"}.srt`;
@@ -255,99 +230,74 @@ export default function Home() {
     setError("");
     setRendering(true);
     setRenderProgress(0);
-
     const originalTime = video.currentTime;
     const originalMuted = video.muted;
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 720;
-    canvas.height = video.videoHeight || 1280;
-    const context = canvas.getContext("2d");
-    if (!context) {
-      setRendering(false);
-      setError("สร้างพื้นที่วิดีโอไม่สำเร็จ");
-      return;
-    }
-
-    const sourceStream = video.captureStream();
-    const canvasStream = canvas.captureStream(30);
-    const outputStream = new MediaStream([
-      ...canvasStream.getVideoTracks(),
-      ...sourceStream.getAudioTracks(),
-    ]);
-
-    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
-      ? "video/webm;codecs=vp9,opus"
-      : "video/webm";
-    const recorder = new MediaRecorder(outputStream, {
-      mimeType,
-      videoBitsPerSecond: 5_000_000,
-    });
-    const chunks: BlobPart[] = [];
-    recorder.ondataavailable = (event) => {
-      if (event.data.size) chunks.push(event.data);
-    };
-
-    const result = new Promise<Blob>((resolve, reject) => {
-      recorder.onerror = () => reject(new Error("สร้างวิดีโอไม่สำเร็จ"));
-      recorder.onstop = () => resolve(new Blob(chunks, { type: "video/webm" }));
-    });
-
-    function draw() {
-      if (!video || !context) return;
-      context.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const subtitle = subtitles.find(
-        (item) => video.currentTime >= item.start && video.currentTime < item.end,
-      );
-      if (subtitle) {
-        const fontSize = Math.max(30, Math.round(canvas.width * 0.055));
-        context.font = `900 ${fontSize}px Arial, sans-serif`;
-        context.textAlign = "center";
-        context.textBaseline = "middle";
-        context.lineJoin = "round";
-        const lines = wrapText(context, subtitle.text, canvas.width * 0.86);
-        const lineHeight = fontSize * 1.22;
-        const startY = canvas.height * 0.78 - ((lines.length - 1) * lineHeight) / 2;
-        lines.forEach((line, index) => {
-          const y = startY + index * lineHeight;
-          context.strokeStyle = "rgba(0,0,0,.95)";
-          context.lineWidth = Math.max(6, fontSize * 0.18);
-          context.strokeText(line, canvas.width / 2, y);
-          context.fillStyle = "#ffffff";
-          context.fillText(line, canvas.width / 2, y);
-        });
-      }
-      setRenderProgress(
-        Math.min(99, Math.round((video.currentTime / Math.max(video.duration, 1)) * 100)),
-      );
-      if (!video.ended && rendering) requestAnimationFrame(draw);
-    }
 
     try {
-      video.pause();
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth || 720;
+      canvas.height = video.videoHeight || 1280;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("เบราว์เซอร์ไม่รองรับการสร้างวิดีโอ");
+
       video.currentTime = 0;
       video.muted = false;
-      await new Promise<void>((resolve) => {
-        if (video.readyState >= 2) resolve();
-        else video.addEventListener("canplay", () => resolve(), { once: true });
+      const sourceStream = video.captureStream();
+      const canvasStream = canvas.captureStream(30);
+      const output = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...sourceStream.getAudioTracks(),
+      ]);
+      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+        ? "video/webm;codecs=vp9,opus"
+        : "video/webm";
+      const recorder = new MediaRecorder(output, { mimeType, videoBitsPerSecond: 6_000_000 });
+      const chunks: BlobPart[] = [];
+      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+
+      await new Promise<void>((resolve, reject) => {
+        recorder.onerror = () => reject(new Error("สร้างวิดีโอไม่สำเร็จ"));
+        recorder.onstop = () => resolve();
+        recorder.start(1000);
+        void video.play();
+
+        const draw = () => {
+          context.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const subtitle = subtitles.find((s) => video.currentTime >= s.start && video.currentTime < s.end);
+          if (subtitle) {
+            const fontSize = Math.max(30, Math.round(canvas.width * 0.055));
+            context.font = `900 ${fontSize}px Arial, sans-serif`;
+            context.textAlign = "center";
+            context.textBaseline = "middle";
+            context.lineJoin = "round";
+            context.lineWidth = Math.max(5, fontSize * 0.16);
+            context.strokeStyle = "#111";
+            context.fillStyle = "#fff";
+            const lines = wrapText(context, subtitle.text, canvas.width * 0.82);
+            const lineHeight = fontSize * 1.22;
+            const baseY = canvas.height * 0.78 - ((lines.length - 1) * lineHeight) / 2;
+            lines.forEach((line, index) => {
+              const y = baseY + index * lineHeight;
+              context.strokeText(line, canvas.width / 2, y);
+              context.fillText(line, canvas.width / 2, y);
+            });
+          }
+          setRenderProgress(Math.min(99, Math.round((video.currentTime / Math.max(video.duration, 1)) * 100)));
+          if (!video.ended && recorder.state === "recording") requestAnimationFrame(draw);
+        };
+        requestAnimationFrame(draw);
+        video.onended = () => { if (recorder.state === "recording") recorder.stop(); };
       });
 
-      recorder.start(1000);
-      await video.play();
-      requestAnimationFrame(draw);
-      await new Promise<void>((resolve) => {
-        video.addEventListener("ended", () => resolve(), { once: true });
-      });
-      recorder.stop();
-      const blob = await result;
-      const url = URL.createObjectURL(blob);
+      const result = new Blob(chunks, { type: "video/webm" });
+      const url = URL.createObjectURL(result);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${file.name.replace(/\.[^.]+$/, "")}-with-subtitles.webm`;
+      a.download = `${file.name.replace(/\.[^.]+$/, "")}-cake-sub.webm`;
       a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      URL.revokeObjectURL(url);
       setRenderProgress(100);
     } catch (caught) {
-      if (recorder.state !== "inactive") recorder.stop();
       setError(caught instanceof Error ? caught.message : "สร้างวิดีโอไม่สำเร็จ");
     } finally {
       video.pause();
@@ -358,110 +308,61 @@ export default function Home() {
   }
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div className="logo-mark">🍰</div>
-        <div>
-          <h1>Cake Sub</h1>
-          <p>ทำซับอัตโนมัติ แล้วใส่ลงคลิปทันที</p>
-        </div>
+    <main>
+      <header>
+        <div className="brand"><div className="logo">🍰</div><div><h1>Cake Sub</h1><p>ทำซับอัตโนมัติ ไม่มีลายน้ำ</p></div></div>
+        <span className="free-badge">ใช้งานส่วนตัว</span>
       </header>
 
-      <input ref={inputRef} type="file" accept="video/*" hidden onChange={selectVideo} />
+      <section className="hero">
+        <span className="pill"><Sparkles size={15}/> AI Subtitle</span>
+        <h2>อัปโหลดคลิป แล้วให้ AI ทำซับให้</h2>
+        <p>ถอดเสียงตามที่ได้ยินจริง แก้ข้อความได้ และสร้างวิดีโอพร้อมซับจากหน้าเดียว</p>
+        <input ref={inputRef} type="file" accept="video/*" hidden onChange={selectVideo}/>
+        <button className="primary" onClick={() => inputRef.current?.click()}><Upload size={19}/>{file ? "เปลี่ยนวิดีโอ" : "เลือกวิดีโอ"}</button>
+        {file && <div className="filename"><Film size={15}/><span>{file.name}</span><small>{(file.size / 1024 / 1024).toFixed(1)} MB</small></div>}
+      </section>
 
-      {!file ? (
-        <section className="start-card">
-          <div className="start-icon"><Film size={34} /></div>
-          <h2>เริ่มจากเลือกวิดีโอ</h2>
-          <p>รองรับ MP4 และ MOV · คลิปไม่เกินประมาณ 2 นาที 10 วินาที</p>
-          <button className="main-button" onClick={() => inputRef.current?.click()}>
-            <Upload size={20} /> เลือกวิดีโอ
-          </button>
-        </section>
-      ) : (
-        <section className="work-grid">
-          <div className="left-column">
-            <div className="video-card">
-              <div className="video-stage">
-                <video
-                  ref={videoRef}
-                  src={videoUrl}
-                  controls
-                  playsInline
-                  onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-                />
-                {active && <div className="live-subtitle">{active.text}</div>}
-              </div>
-              <div className="file-line">
-                <span title={file.name}>{file.name}</span>
-                <button onClick={() => inputRef.current?.click()}>เปลี่ยนคลิป</button>
-              </div>
-            </div>
-
-            <button className="main-button full" disabled={Boolean(status)} onClick={generate}>
-              {status ? <LoaderCircle className="spin" size={20} /> : <Sparkles size={20} />}
-              {status || "AI สร้างซับทั้งคลิป"}
-            </button>
-
-            {status && (
-              <div className="progress-card">
-                <div><span>{status}</span><b>{progress}%</b></div>
-                <div className="progress-track"><i style={{ width: `${progress}%` }} /></div>
-              </div>
+      <section className="workspace">
+        <div className="video-column">
+          <div className="phone-frame">
+            {videoUrl ? (
+              <><video ref={videoRef} src={videoUrl} controls onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}/>{active && <div className="subtitle-preview">{active.text}</div>}</>
+            ) : (
+              <div className="empty-video"><Video size={38}/><b>ยังไม่ได้เลือกคลิป</b><span>รองรับ MP4 และ MOV</span></div>
             )}
-            {error && <div className="error-message">{error}</div>}
           </div>
+          <button className="ai-button" disabled={!file || Boolean(status)} onClick={generate}>{status ? <LoaderCircle className="spin"/> : <Sparkles/>}{status || "AI สร้างซับ"}</button>
+          {status && <div className="progress-card"><div className="progress-head"><b>{status}</b><span>{progress}%</span></div><div className="progress-track"><div style={{width:`${progress}%`}}/></div><p>AI จะไม่เติมข้อความ fallback หากช่วงใดฟังไม่ชัด</p></div>}
+          {error && <div className="error-box">{error}</div>}
+          {subtitles.length > 0 && <div className="success-box"><CheckCircle2 size={18}/>สร้างซับแล้ว {subtitles.length} ช่วง</div>}
+        </div>
 
-          <div className="editor-card">
-            <div className="editor-head">
-              <div>
-                <h2>ข้อความซับ</h2>
-                <p>{subtitles.length ? `${subtitles.length} ช่วง · แตะเพื่อแก้ได้` : "กด AI สร้างซับก่อน"}</p>
-              </div>
-              {subtitles.length > 0 && <span className="ready-badge"><Check size={14} /> พร้อมแก้</span>}
-            </div>
-
+        <div className="panel">
+          <div className="section-title"><div><h3>ข้อความซับ</h3><p>กดเล่นแต่ละช่วงเพื่อตรวจและแก้คำ</p></div><span>{subtitles.length} ช่วง</span></div>
+          {subtitles.length === 0 ? (
+            <div className="empty-list"><Sparkles size={34}/><b>ซับจะปรากฏตรงนี้</b><p>เลือกคลิปแล้วกด AI สร้างซับ</p></div>
+          ) : (
             <div className="subtitle-list">
-              {!subtitles.length ? (
-                <div className="empty-editor"><WandSparkles size={28} /><p>ซับที่สร้างจะอยู่ตรงนี้</p></div>
-              ) : (
-                subtitles.map((subtitle) => (
-                  <article className="subtitle-item" key={subtitle.id}>
-                    <button
-                      className="play-item"
-                      onClick={() => {
-                        if (videoRef.current) {
-                          videoRef.current.currentTime = subtitle.start;
-                          void videoRef.current.play();
-                        }
-                      }}
-                    ><Play size={15} /></button>
-                    <div className="subtitle-body">
-                      <div className="time-fields">
-                        <label>เริ่ม<input type="number" step="0.1" value={subtitle.start} onChange={(e) => setSubtitles((all) => all.map((s) => s.id === subtitle.id ? { ...s, start: Number(e.target.value) } : s))} /></label>
-                        <label>จบ<input type="number" step="0.1" value={subtitle.end} onChange={(e) => setSubtitles((all) => all.map((s) => s.id === subtitle.id ? { ...s, end: Number(e.target.value) } : s))} /></label>
-                        <span>{clock(subtitle.start)}</span>
-                      </div>
-                      <textarea value={subtitle.text} onChange={(e) => setSubtitles((all) => all.map((s) => s.id === subtitle.id ? { ...s, text: e.target.value } : s))} />
-                    </div>
-                    <button className="delete-item" onClick={() => setSubtitles((all) => all.filter((s) => s.id !== subtitle.id))}><Trash2 size={16} /></button>
-                  </article>
-                ))
-              )}
+              {subtitles.map((subtitle) => (
+                <div className="subtitle-row" key={subtitle.id}>
+                  <button className="play-row" onClick={() => { if(videoRef.current){videoRef.current.currentTime=subtitle.start; void videoRef.current.play();}}}><Play size={15}/></button>
+                  <div className="sub-fields">
+                    <div className="times"><label>เริ่ม<input type="number" step="0.1" value={subtitle.start} onChange={(e)=>setSubtitles((all)=>all.map((s)=>s.id===subtitle.id?{...s,start:Number(e.target.value)}:s))}/></label><label>จบ<input type="number" step="0.1" value={subtitle.end} onChange={(e)=>setSubtitles((all)=>all.map((s)=>s.id===subtitle.id?{...s,end:Number(e.target.value)}:s))}/></label><span>{clock(subtitle.start)}</span></div>
+                    <textarea value={subtitle.text} onChange={(e)=>setSubtitles((all)=>all.map((s)=>s.id===subtitle.id?{...s,text:e.target.value}:s))}/>
+                  </div>
+                  <button className="trash" onClick={()=>setSubtitles((all)=>all.filter((s)=>s.id!==subtitle.id))}><Trash2 size={17}/></button>
+                </div>
+              ))}
             </div>
-
-            {subtitles.length > 0 && (
-              <div className="export-row">
-                <button className="light-button" onClick={downloadSrt}><Download size={18} /> ดาวน์โหลด SRT</button>
-                <button className="export-button" disabled={rendering} onClick={renderVideo}>
-                  {rendering ? <LoaderCircle className="spin" size={18} /> : <Film size={18} />}
-                  {rendering ? `กำลังสร้างคลิป ${renderProgress}%` : "สร้างวิดีโอพร้อมซับ"}
-                </button>
-              </div>
-            )}
+          )}
+          <div className="actions">
+            <button className="secondary" disabled={!subtitles.length} onClick={downloadSrt}><Download size={18}/>ดาวน์โหลด SRT</button>
+            <button className="primary" disabled={!subtitles.length || rendering} onClick={renderVideo}>{rendering ? <LoaderCircle className="spin"/> : <Film size={18}/>} {rendering ? `กำลังสร้าง ${renderProgress}%` : "สร้างวิดีโอพร้อมซับ"}</button>
           </div>
-        </section>
-      )}
+          <div className="notice">สร้างวิดีโอด้วย Chrome หรือ Edge บนคอม ไฟล์ผลลัพธ์เป็น WebM และไม่มีลายน้ำ</div>
+        </div>
+      </section>
     </main>
   );
 }

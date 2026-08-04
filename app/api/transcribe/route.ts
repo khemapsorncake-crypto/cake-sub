@@ -4,7 +4,6 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 type GroqSegment = {
-  id?: number;
   start?: number;
   end?: number;
   text?: string;
@@ -13,11 +12,26 @@ type GroqSegment = {
   compression_ratio?: number;
 };
 
-function looksHallucinated(text: string) {
-  const clean = text.replace(/\s+/g, " ").trim();
-  const compact = clean.replace(/\s/g, "");
-  if (!clean) return true;
-  if (/^(ขอบคุณที่รับชม|โปรดติดตามตอนต่อไป|ซับไตเติล|ดนตรี|เพลง|thank you for watching)[.!…]*$/i.test(clean)) return true;
+function normalizeText(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function isLikelyHallucination(segment: GroqSegment, duration: number) {
+  const text = normalizeText(segment.text);
+  const compact = text.replace(/\s/g, "");
+  const start = Number(segment.start ?? 0);
+  const end = Number(segment.end ?? start);
+  const noSpeech = Number(segment.no_speech_prob ?? 0);
+  const avgLogProb = Number(segment.avg_logprob ?? 0);
+  const compression = Number(segment.compression_ratio ?? 0);
+
+  if (!text) return true;
+  if (duration > 0 && (start > duration + 0.25 || end > duration + 1)) return true;
+  if (end <= start) return true;
+  if (noSpeech > 0.58) return true;
+  if (avgLogProb < -1.15) return true;
+  if (compression > 2.45) return true;
+  if (/^(ขอบคุณที่รับชม|โปรดติดตามตอนต่อไป|ซับไตเติล|ดนตรี|เพลง|thank you for watching)[.!…]*$/i.test(text)) return true;
   if (/(.{2,12})\1\1/i.test(compact)) return true;
   return false;
 }
@@ -44,6 +58,7 @@ export async function POST(request: Request) {
     form.append("file", audio, "cake-sub.wav");
     form.append("model", "whisper-large-v3");
     form.append("language", "th");
+    form.append("task", "transcribe");
     form.append("response_format", "verbose_json");
     form.append("temperature", "0");
     form.append("timestamp_granularities[]", "segment");
@@ -57,10 +72,10 @@ export async function POST(request: Request) {
       },
     );
 
-    const rawText = await response.text();
+    const raw = await response.text();
     let data: Record<string, unknown> = {};
     try {
-      data = rawText ? JSON.parse(rawText) : {};
+      data = raw ? JSON.parse(raw) : {};
     } catch {
       return NextResponse.json(
         { error: "บริการถอดเสียงตอบกลับไม่ถูกต้อง กรุณาลองใหม่" },
@@ -81,29 +96,26 @@ export async function POST(request: Request) {
       : [];
 
     const segments = inputSegments
-      .filter((segment) => {
-        const text = String(segment.text || "").trim();
-        const start = Number(segment.start || 0);
-        if (looksHallucinated(text)) return false;
-        if (duration > 0 && start > duration + 0.5) return false;
-        if (Number(segment.no_speech_prob || 0) > 0.72) return false;
-        if (Number(segment.compression_ratio || 0) > 2.8) return false;
-        return true;
+      .filter((segment) => !isLikelyHallucination(segment, duration))
+      .map((segment) => {
+        const start = Math.max(0, Number(segment.start ?? 0));
+        const rawEnd = Math.max(start + 0.35, Number(segment.end ?? start + 0.35));
+        return {
+          start,
+          end: duration > 0 ? Math.min(duration, rawEnd) : rawEnd,
+          text: normalizeText(segment.text),
+        };
       })
-      .map((segment) => ({
-        start: Math.max(0, Number(segment.start || 0)),
-        end: Math.min(
-          duration > 0 ? duration : Number.MAX_SAFE_INTEGER,
-          Math.max(Number(segment.end || 0), Number(segment.start || 0) + 0.4),
-        ),
-        text: String(segment.text || "").replace(/\s+/g, " ").trim(),
-      }));
+      .filter((segment) => segment.text && segment.end > segment.start);
 
-    return NextResponse.json({
-      text: segments.map((segment) => segment.text).join(" "),
-      segments,
-      duration,
-    });
+    if (!segments.length) {
+      return NextResponse.json(
+        { error: "ไม่พบเสียงพูดที่ชัดเจนพอ กรุณาลองคลิปที่เสียงพูดดังขึ้น" },
+        { status: 422 },
+      );
+    }
+
+    return NextResponse.json({ segments, duration });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "เกิดข้อผิดพลาด" },

@@ -1,30 +1,45 @@
 # Cake Sub
 
-เว็บทำซับแบบ Mobile First สำหรับใช้งานส่วนตัว
+เว็บทำซับสำหรับใช้งานบนโทรศัพท์
 
-## ความสามารถในเวอร์ชันนี้
-- เลือกวิดีโอจากโทรศัพท์หรือคอมพิวเตอร์
-- พรีวิววิดีโอแนวตั้ง
-- เพิ่ม ลบ และแก้ข้อความซับ
-- แก้เวลาเริ่มและจบของแต่ละประโยค
-- ปรับขนาด สี ขอบ ตำแหน่ง และเอฟเฟกต์ซับ
-- บันทึกข้อมูลโปรเจกต์ไว้ในเบราว์เซอร์
-- ดาวน์โหลดซับเป็นไฟล์ `.srt`
-- เพิ่มเว็บไว้บนหน้าจอโฮมของโทรศัพท์ได้
+## วิธี Deploy บน Vercel
 
-## รันบนเครื่อง
-1. ติดตั้ง Node.js 20 ขึ้นไป
-2. เปิด Terminal ในโฟลเดอร์ `cake-sub`
-3. รัน `npm install`
-4. รัน `npm run dev`
-5. เปิด `http://localhost:3000`
+### วิธีที่แนะนำ: อัปขึ้น GitHub
+1. แตกไฟล์ ZIP นี้ก่อน
+2. สร้าง Repository ใหม่ใน GitHub
+3. อัปโหลดไฟล์ทั้งหมดที่อยู่ภายในโฟลเดอร์ โดย `package.json` ต้องอยู่หน้าแรกของ Repository
+4. เข้า Vercel > Add New > Project
+5. เลือก Repository ของ Cake Sub
+6. Framework Preset เลือก Next.js
+7. Root Directory ปล่อยเป็น `./`
+8. Build Command ใช้ `npm run build`
+9. Output Directory เว้นว่าง ห้ามใส่ `public`
+10. กด Deploy
 
-## นำขึ้น Vercel
-1. อัปโหลดโฟลเดอร์นี้ขึ้น GitHub
-2. เข้า Vercel แล้วกด Add New > Project
-3. เลือก Repository `cake-sub`
-4. Framework Preset เลือก Next.js
-5. กด Deploy
+## ตรวจตำแหน่งไฟล์
+โครงสร้างที่ถูกต้องต้องเป็นแบบนี้
 
-## หมายเหตุ
-เวอร์ชันแรกยังไม่ถอดเสียงจากวิดีโอและยังไม่เผาซับลงไฟล์ MP4 อัตโนมัติ ฟังก์ชันดังกล่าวต้องเพิ่มระบบประมวลผลเสียงและวิดีโอภายหลัง
+```
+package.json
+vercel.json
+next.config.ts
+app/
+public/
+```
+
+ห้ามเป็นแบบนี้
+
+```
+cake-sub/
+  package.json
+  app/
+```
+
+ถ้า Repository เดิมมีโฟลเดอร์ `cake-sub` ซ้อน ให้ตั้ง Vercel > Project Settings > Build and Deployment > Root Directory เป็น `cake-sub`
+
+## เปิดบนเครื่อง
+
+```bash
+npm install
+npm run dev
+```

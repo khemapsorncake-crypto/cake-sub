@@ -39,13 +39,15 @@ type WhisperChunk = {
 
 const MODEL_OPTIONS = {
   accurate: {
-    id: "onnx-community/whisper-base",
-    label: "แม่นยำขึ้น",
-    dtype: "q4",
+    id: "onnx-community/whisper-small",
+    label: "แม่นยำสูง",
+    description: "Whisper Small · แนะนำสำหรับคอม RAM 8 GB ขึ้นไป",
+    dtype: "q8",
   },
-  balanced: {
-    id: "onnx-community/whisper-tiny",
-    label: "เร็วและไม่ค้าง",
+  maximum: {
+    id: "onnx-community/whisper-medium",
+    label: "แม่นสุด (ทดลอง)",
+    description: "Whisper Medium · แนะนำ RAM 16 GB และ Chrome/Edge รุ่นใหม่",
     dtype: "q8",
   },
 } as const;
@@ -175,7 +177,8 @@ export default function Home() {
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
-  const [quality, setQuality] = useState<keyof typeof MODEL_OPTIONS>("balanced");
+  const [quality, setQuality] = useState<keyof typeof MODEL_OPTIONS>("accurate");
+  const [engine, setEngine] = useState("กำลังตรวจสอบเครื่อง");
 
   useEffect(() => {
     return () => {
@@ -229,12 +232,18 @@ export default function Home() {
       env.allowLocalModels = false;
       env.useBrowserCache = true;
 
-      const transcriber = await pipeline(
-        "automatic-speech-recognition",
-        selectedModel.id,
-        {
-          dtype: selectedModel.dtype,
-          device: "wasm",
+      const hasWebGpu = typeof navigator !== "undefined" && "gpu" in navigator;
+      const device = hasWebGpu ? "webgpu" : "wasm";
+      setEngine(hasWebGpu ? "WebGPU" : "WASM (CPU)");
+
+      let transcriber;
+      try {
+        transcriber = await pipeline(
+          "automatic-speech-recognition",
+          selectedModel.id,
+          {
+            dtype: selectedModel.dtype,
+            device,
           progress_callback: (item: unknown) => {
             const info = item as {
               status?: string;
@@ -255,18 +264,33 @@ export default function Home() {
               });
             }
           },
-        },
-      );
+          },
+        );
+      } catch (modelError) {
+        if (quality !== "maximum") throw modelError;
+        setProgress({ label: "Medium ใช้หน่วยความจำเกิน กำลังสลับเป็น Small", percent: 18 });
+        transcriber = await pipeline(
+          "automatic-speech-recognition",
+          MODEL_OPTIONS.accurate.id,
+          {
+            dtype: MODEL_OPTIONS.accurate.dtype,
+            device,
+          },
+        );
+      }
 
       const sampleRate = 16_000;
-      const chunkSeconds = quality === "accurate" ? 20 : 25;
+      const chunkSeconds = 28;
+      const overlapSeconds = 3;
       const chunkSamples = sampleRate * chunkSeconds;
-      const totalChunks = Math.max(1, Math.ceil(audio.length / chunkSamples));
+      const overlapSamples = sampleRate * overlapSeconds;
+      const stepSamples = chunkSamples - overlapSamples;
+      const totalChunks = Math.max(1, Math.ceil(Math.max(1, audio.length - overlapSamples) / stepSamples));
       const allChunks: WhisperChunk[] = [];
       const allText: string[] = [];
 
       for (let index = 0; index < totalChunks; index += 1) {
-        const startSample = index * chunkSamples;
+        const startSample = index * stepSamples;
         const endSample = Math.min(audio.length, startSample + chunkSamples);
         const audioPart = audio.slice(startSample, endSample);
         const offsetSeconds = startSample / sampleRate;
@@ -283,9 +307,11 @@ export default function Home() {
           return_timestamps: true,
           condition_on_prev_tokens: false,
           temperature: 0,
-          no_speech_threshold: 0.6,
+          no_speech_threshold: 0.45,
           logprob_threshold: -1,
           compression_ratio_threshold: 2.4,
+          chunk_length_s: 28,
+          stride_length_s: 3,
         });
         const part = rawPart as unknown as {
           text?: string;
@@ -305,7 +331,16 @@ export default function Home() {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
 
-      const nextSubtitles = normalizeChunks(allChunks, allText.join(" "));
+      const uniqueChunks = allChunks.filter((chunk, index, source) => {
+        const text = (chunk.text ?? "").trim();
+        const start = Number(chunk.timestamp?.[0] ?? 0);
+        return !source.slice(0, index).some((previous) => {
+          const previousText = (previous.text ?? "").trim();
+          const previousStart = Number(previous.timestamp?.[0] ?? 0);
+          return text === previousText && Math.abs(start - previousStart) < overlapSeconds + 0.5;
+        });
+      });
+      const nextSubtitles = normalizeChunks(uniqueChunks, allText.join(" "));
       if (nextSubtitles.length === 0) {
         throw new Error("AI ไม่พบเสียงพูดในคลิปนี้");
       }
@@ -446,22 +481,17 @@ export default function Home() {
             <div className="quality-card">
               <b>ความแม่นยำ</b>
               <div className="quality-options">
-                <button
-                  className={quality === "accurate" ? "active" : ""}
-                  onClick={() => setQuality("accurate")}
-                  type="button"
-                >
-                  แม่นยำขึ้น
-                  <small>Whisper Base · เหมาะกับคอม/มือถือแรง</small>
-                </button>
-                <button
-                  className={quality === "balanced" ? "active" : ""}
-                  onClick={() => setQuality("balanced")}
-                  type="button"
-                >
-                  เร็วและไม่ค้าง
-                  <small>Whisper Tiny · แนะนำสำหรับมือถือ</small>
-                </button>
+                {(Object.keys(MODEL_OPTIONS) as Array<keyof typeof MODEL_OPTIONS>).map((key) => (
+                  <button
+                    key={key}
+                    className={quality === key ? "active" : ""}
+                    onClick={() => setQuality(key)}
+                    type="button"
+                  >
+                    {MODEL_OPTIONS[key].label}
+                    <small>{MODEL_OPTIONS[key].description}</small>
+                  </button>
+                ))}
               </div>
             </div>
           )}
@@ -491,7 +521,7 @@ export default function Home() {
                 <div style={{ width: `${progress.percent}%` }} />
               </div>
               <p>
-                ระบบแบ่งคลิปเป็นช่วงสั้น ๆ แล้ว เปอร์เซ็นต์จะขยับตามช่วงที่ AI ฟังจริง
+                เครื่องประมวลผล: {engine} · ระบบแบ่งเสียงเป็นช่วงซ้อนกันเพื่อลดคำตกหล่น
               </p>
             </div>
           )}
@@ -599,9 +629,9 @@ export default function Home() {
           </div>
 
           <div className="notice">
-            <b>หมายเหตุ:</b> รุ่นนี้สร้างซับและดาวน์โหลด SRT ได้ก่อน
-            ยังไม่ได้เผาซับลงไฟล์ MP4 โดยตรง
-            การถอดเสียงบนมือถือขึ้นอยู่กับ RAM และความเร็วของเครื่อง
+            <b>โหมด Desktop Accurate:</b> ใช้ Whisper Small เป็นค่าเริ่มต้น
+            และใช้ WebGPU อัตโนมัติเมื่อ Chrome/Edge รองรับ แนะนำคลิปเสียงพูดชัด
+            ปิดเพลงหรือเสียงรบกวนให้เบากว่าเสียงพูดเพื่อผลลัพธ์ดีที่สุด
           </div>
         </div>
       </section>

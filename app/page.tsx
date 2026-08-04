@@ -279,68 +279,29 @@ export default function Home() {
         );
       }
 
-      const sampleRate = 16_000;
-      const chunkSeconds = 28;
-      const overlapSeconds = 3;
-      const chunkSamples = sampleRate * chunkSeconds;
-      const overlapSamples = sampleRate * overlapSeconds;
-      const stepSamples = chunkSamples - overlapSamples;
-      const totalChunks = Math.max(1, Math.ceil(Math.max(1, audio.length - overlapSamples) / stepSamples));
-      const allChunks: WhisperChunk[] = [];
-      const allText: string[] = [];
+      setProgress({ label: "AI กำลังฟังคลิปทั้งคลิป", percent: 70 });
 
-      for (let index = 0; index < totalChunks; index += 1) {
-        const startSample = index * stepSamples;
-        const endSample = Math.min(audio.length, startSample + chunkSamples);
-        const audioPart = audio.slice(startSample, endSample);
-        const offsetSeconds = startSample / sampleRate;
-        const inferencePercent = 70 + Math.round(((index + 1) / totalChunks) * 23);
-
-        setProgress({
-          label: `AI กำลังฟังช่วง ${index + 1}/${totalChunks}`,
-          percent: Math.min(93, inferencePercent),
-        });
-
-        const rawPart = await transcriber(audioPart, {
-          language: "thai",
-          task: "transcribe",
-          return_timestamps: true,
-          condition_on_prev_tokens: false,
-          temperature: 0,
-          no_speech_threshold: 0.45,
-          logprob_threshold: -1,
-          compression_ratio_threshold: 2.4,
-          chunk_length_s: 28,
-          stride_length_s: 3,
-        });
-        const part = rawPart as unknown as {
-          text?: string;
-          chunks?: WhisperChunk[];
-        };
-
-        if (part.text?.trim()) allText.push(part.text.trim());
-        if (Array.isArray(part.chunks)) {
-          for (const chunk of part.chunks) {
-            const start = Number(chunk.timestamp?.[0] ?? 0) + offsetSeconds;
-            const rawEnd = chunk.timestamp?.[1];
-            const end = Number(rawEnd ?? Number(chunk.timestamp?.[0] ?? 0) + 3) + offsetSeconds;
-            allChunks.push({ ...chunk, timestamp: [start, end] });
-          }
-        }
-
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      }
-
-      const uniqueChunks = allChunks.filter((chunk, index, source) => {
-        const text = (chunk.text ?? "").trim();
-        const start = Number(chunk.timestamp?.[0] ?? 0);
-        return !source.slice(0, index).some((previous) => {
-          const previousText = (previous.text ?? "").trim();
-          const previousStart = Number(previous.timestamp?.[0] ?? 0);
-          return text === previousText && Math.abs(start - previousStart) < overlapSeconds + 0.5;
-        });
+      const rawResult = await transcriber(audio, {
+        language: "thai",
+        task: "transcribe",
+        return_timestamps: true,
+        condition_on_prev_tokens: false,
+        temperature: 0,
+        no_speech_threshold: 0.45,
+        logprob_threshold: -1,
+        compression_ratio_threshold: 2.4,
+        chunk_length_s: 30,
+        stride_length_s: 5,
       });
-      const nextSubtitles = normalizeChunks(uniqueChunks, allText.join(" "));
+
+      const result = rawResult as unknown as {
+        text?: string;
+        chunks?: WhisperChunk[];
+      };
+
+      setProgress({ label: "กำลังจัดช่วงเวลาให้ซับ", percent: 92 });
+      const wholeClipChunks = Array.isArray(result.chunks) ? result.chunks : [];
+      const nextSubtitles = normalizeChunks(wholeClipChunks, result.text ?? "");
       if (nextSubtitles.length === 0) {
         throw new Error("AI ไม่พบเสียงพูดในคลิปนี้");
       }

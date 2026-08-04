@@ -37,7 +37,18 @@ type WhisperChunk = {
   timestamp?: [number | null, number | null];
 };
 
-const MODEL_ID = "onnx-community/whisper-tiny";
+const MODEL_OPTIONS = {
+  accurate: {
+    id: "onnx-community/whisper-base",
+    label: "แม่นยำขึ้น",
+    dtype: "q4",
+  },
+  balanced: {
+    id: "onnx-community/whisper-tiny",
+    label: "เร็วและไม่ค้าง",
+    dtype: "q8",
+  },
+} as const;
 
 function srtTime(time: number) {
   const safe = Math.max(0, Number.isFinite(time) ? time : 0);
@@ -105,6 +116,30 @@ async function decodeAndResample(file: File): Promise<Float32Array> {
   }
 }
 
+
+function cleanAudio(input: Float32Array): Float32Array {
+  if (!input.length) return input;
+  let peak = 0;
+  for (let i = 0; i < input.length; i += 1) peak = Math.max(peak, Math.abs(input[i]));
+  const gain = peak > 0 ? Math.min(1.8, 0.92 / peak) : 1;
+  const output = new Float32Array(input.length);
+  let previous = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    const sample = input[i] * gain;
+    output[i] = sample - previous * 0.97;
+    previous = sample;
+  }
+  return output;
+}
+
+function looksHallucinated(text: string) {
+  const compact = text.replace(/\s+/g, "");
+  if (!compact) return true;
+  if (/^(ขอบคุณ|โปรดติดตาม|ซับไตเติล|เพลง|ดนตรี)[.!…]*$/i.test(text.trim())) return true;
+  if (/(.{2,8})\1\1/.test(compact)) return true;
+  return false;
+}
+
 function normalizeChunks(chunks: WhisperChunk[], fullText: string): Subtitle[] {
   const cleaned = chunks
     .map((chunk, index) => {
@@ -112,7 +147,7 @@ function normalizeChunks(chunks: WhisperChunk[], fullText: string): Subtitle[] {
       const endValue = chunk.timestamp?.[1];
       const end = Number(endValue ?? start + 3);
       const text = (chunk.text ?? "").trim();
-      if (!text) return null;
+      if (!text || looksHallucinated(text)) return null;
       return {
         id: `${Date.now()}-${index}`,
         start,
@@ -140,6 +175,7 @@ export default function Home() {
   const [progress, setProgress] = useState<ProgressState | null>(null);
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
+  const [quality, setQuality] = useState<keyof typeof MODEL_OPTIONS>("balanced");
 
   useEffect(() => {
     return () => {
@@ -180,7 +216,9 @@ export default function Home() {
     setReady(false);
     try {
       setProgress({ label: "กำลังอ่านเสียงจากคลิป", percent: 5 });
-      const audio = await decodeAndResample(videoFile);
+      const decodedAudio = await decodeAndResample(videoFile);
+      const audio = cleanAudio(decodedAudio);
+      const selectedModel = MODEL_OPTIONS[quality];
 
       setProgress({ label: "กำลังโหลดโมเดล AI ครั้งแรก", percent: 15 });
       const transformersUrl =
@@ -193,9 +231,9 @@ export default function Home() {
 
       const transcriber = await pipeline(
         "automatic-speech-recognition",
-        MODEL_ID,
+        selectedModel.id,
         {
-          dtype: "q8",
+          dtype: selectedModel.dtype,
           device: "wasm",
           progress_callback: (item: unknown) => {
             const info = item as {
@@ -220,23 +258,54 @@ export default function Home() {
         },
       );
 
-      setProgress({ label: "AI กำลังฟังและสร้างซับ", percent: 70 });
-      const rawResult = await transcriber(audio, {
-        language: "thai",
-        task: "transcribe",
-        return_timestamps: true,
-        chunk_length_s: 20,
-        stride_length_s: 4,
-      });
-      const result = rawResult as unknown as {
-        text?: string;
-        chunks?: WhisperChunk[];
-      };
+      const sampleRate = 16_000;
+      const chunkSeconds = quality === "accurate" ? 20 : 25;
+      const chunkSamples = sampleRate * chunkSeconds;
+      const totalChunks = Math.max(1, Math.ceil(audio.length / chunkSamples));
+      const allChunks: WhisperChunk[] = [];
+      const allText: string[] = [];
 
-      const nextSubtitles = normalizeChunks(
-        Array.isArray(result.chunks) ? result.chunks : [],
-        result.text ?? "",
-      );
+      for (let index = 0; index < totalChunks; index += 1) {
+        const startSample = index * chunkSamples;
+        const endSample = Math.min(audio.length, startSample + chunkSamples);
+        const audioPart = audio.slice(startSample, endSample);
+        const offsetSeconds = startSample / sampleRate;
+        const inferencePercent = 70 + Math.round(((index + 1) / totalChunks) * 23);
+
+        setProgress({
+          label: `AI กำลังฟังช่วง ${index + 1}/${totalChunks}`,
+          percent: Math.min(93, inferencePercent),
+        });
+
+        const rawPart = await transcriber(audioPart, {
+          language: "thai",
+          task: "transcribe",
+          return_timestamps: true,
+          condition_on_prev_tokens: false,
+          temperature: 0,
+          no_speech_threshold: 0.6,
+          logprob_threshold: -1,
+          compression_ratio_threshold: 2.4,
+        });
+        const part = rawPart as unknown as {
+          text?: string;
+          chunks?: WhisperChunk[];
+        };
+
+        if (part.text?.trim()) allText.push(part.text.trim());
+        if (Array.isArray(part.chunks)) {
+          for (const chunk of part.chunks) {
+            const start = Number(chunk.timestamp?.[0] ?? 0) + offsetSeconds;
+            const rawEnd = chunk.timestamp?.[1];
+            const end = Number(rawEnd ?? Number(chunk.timestamp?.[0] ?? 0) + 3) + offsetSeconds;
+            allChunks.push({ ...chunk, timestamp: [start, end] });
+          }
+        }
+
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+
+      const nextSubtitles = normalizeChunks(allChunks, allText.join(" "));
       if (nextSubtitles.length === 0) {
         throw new Error("AI ไม่พบเสียงพูดในคลิปนี้");
       }
@@ -374,6 +443,30 @@ export default function Home() {
           </div>
 
           {videoFile && (
+            <div className="quality-card">
+              <b>ความแม่นยำ</b>
+              <div className="quality-options">
+                <button
+                  className={quality === "accurate" ? "active" : ""}
+                  onClick={() => setQuality("accurate")}
+                  type="button"
+                >
+                  แม่นยำขึ้น
+                  <small>Whisper Base · เหมาะกับคอม/มือถือแรง</small>
+                </button>
+                <button
+                  className={quality === "balanced" ? "active" : ""}
+                  onClick={() => setQuality("balanced")}
+                  type="button"
+                >
+                  เร็วและไม่ค้าง
+                  <small>Whisper Tiny · แนะนำสำหรับมือถือ</small>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {videoFile && (
             <button
               className="ai-button"
               onClick={generateSubtitles}
@@ -398,7 +491,7 @@ export default function Home() {
                 <div style={{ width: `${progress.percent}%` }} />
               </div>
               <p>
-                ครั้งแรกต้องดาวน์โหลดโมเดล AI และอาจใช้เวลานานกว่าครั้งต่อไป
+                ระบบแบ่งคลิปเป็นช่วงสั้น ๆ แล้ว เปอร์เซ็นต์จะขยับตามช่วงที่ AI ฟังจริง
               </p>
             </div>
           )}

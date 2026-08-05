@@ -1,23 +1,17 @@
-# Cake Sub V3.2 Exact
+# Cake Sub V3.4 — Mobile + Long Thai Text Fix
 
-หน้าตาโทนม่วงแบบเวอร์ชันแรก + Groq Whisper Large V3
+แก้ไข:
+- เปิดหน้าเว็บบนมือถือได้ดีขึ้น
+- ซับภาษาไทยยาวตัดบรรทัดตามคำ ไม่ตัดข้อความทิ้ง
+- ลดขนาดฟอนต์อัตโนมัติเมื่อข้อความยาว
+- กันซับตกขอบบน/ล่างของวิดีโอ
+- ดาวน์โหลดไฟล์แบบ MP4 เมื่อเบราว์เซอร์รองรับ
+- fallback เป็น WebM ที่เป็นไฟล์วิดีโอจริง
+- หน่วงการ revoke URL เพื่อแก้ปัญหามือถือดาวน์โหลดไฟล์ 0 KB
+- เอา `output: export` และพารามิเตอร์ Groq `task` ออก
 
-## สิ่งที่ปรับ
-- ไม่มี prompt ที่ชวนให้ AI ตีความ
-- บังคับภาษาไทย + transcribe เท่านั้น
-- temperature 0
-- กรอง segment ที่ความมั่นใจต่ำ ช่วงเงียบ และข้อความซ้ำหลอน
-- ไม่มี fallback ข้อความยาว ๆ ที่แต่งเอง
-- แก้ซับและเวลาได้
-- ดาวน์โหลด SRT
-- สร้างวิดีโอ WebM พร้อมซับ ไม่มีลายน้ำ
-
-## Deploy Vercel
-1. อัปโหลดไฟล์ทั้งหมดขึ้น GitHub
-2. Root Directory: `./`
-3. Build Command: `npm run build`
-4. Output Directory: ปล่อยว่าง
-5. Environment Variable: `GROQ_API_KEY`
-6. Redeploy
-
-`next.config.ts` ต้องไม่มี `output: "export"`
+ตั้งค่า Vercel:
+- Framework: Next.js
+- Root Directory: ว่าง หรือ ./
+- Output Directory: ว่าง
+- Environment Variable: GROQ_API_KEY

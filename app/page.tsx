@@ -33,21 +33,63 @@ function srtTime(value: number) {
   return `${hours}:${minutes}:${seconds},${milliseconds}`;
 }
 
+function textTokens(text: string) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean) return [];
+
+  try {
+    const Segmenter = Intl.Segmenter;
+    if (Segmenter) {
+      return Array.from(new Segmenter("th", { granularity: "word" }).segment(clean))
+        .map((item) => item.segment)
+        .filter(Boolean);
+    }
+  } catch {
+    // ใช้ fallback ด้านล่าง
+  }
+
+  return Array.from(clean);
+}
+
 function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
-  const words = text.split(/\s+/).filter(Boolean);
+  const tokens = textTokens(text);
   const lines: string[] = [];
   let line = "";
-  for (const word of words) {
-    const candidate = line ? `${line} ${word}` : word;
-    if (context.measureText(candidate).width > maxWidth && line) {
-      lines.push(line);
-      line = word;
-    } else {
+
+  for (const token of tokens) {
+    const candidate = `${line}${token}`;
+    if (context.measureText(candidate).width <= maxWidth || !line) {
       line = candidate;
+      continue;
     }
+
+    lines.push(line.trim());
+    line = token.trimStart();
   }
-  if (line) lines.push(line);
-  return lines.slice(0, 3);
+
+  if (line.trim()) lines.push(line.trim());
+  return lines;
+}
+
+function fitSubtitle(
+  context: CanvasRenderingContext2D,
+  text: string,
+  fontFamily: string,
+  preferredSize: number,
+  maxWidth: number,
+  maxLines = 4,
+) {
+  let size = preferredSize;
+  let lines: string[] = [];
+
+  while (size >= 18) {
+    context.font = `900 ${size}px "${fontFamily}", Tahoma, Arial, sans-serif`;
+    lines = wrapText(context, text, maxWidth);
+    if (lines.length <= maxLines) break;
+    size -= 2;
+  }
+
+  return { lines, fontSize: size };
 }
 
 async function videoToWav(file: File): Promise<{ blob: Blob; duration: number }> {
@@ -229,7 +271,7 @@ export default function Home() {
     const video = videoRef.current as CaptureVideo | null;
     if (!video || !file || !subtitles.length || rendering) return;
     if (!video.captureStream || typeof MediaRecorder === "undefined") {
-      setError("การสร้างวิดีโอต้องเปิดด้วย Chrome หรือ Edge บนคอม");
+      setError("เบราว์เซอร์นี้ยังสร้างไฟล์วิดีโอไม่ได้ กรุณาใช้ Chrome/Edge บนคอม หรือ Safari รุ่นใหม่บน iPhone");
       return;
     }
 
@@ -254,9 +296,14 @@ export default function Home() {
         ...canvasStream.getVideoTracks(),
         ...sourceStream.getAudioTracks(),
       ]);
-      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
-        ? "video/webm;codecs=vp9,opus"
-        : "video/webm";
+      const mimeCandidates = [
+        "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+        "video/mp4",
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm",
+      ];
+      const mimeType = mimeCandidates.find((type) => MediaRecorder.isTypeSupported(type)) || "video/webm";
       const recorder = new MediaRecorder(output, { mimeType, videoBitsPerSecond: 6_000_000 });
       const chunks: BlobPart[] = [];
       recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
@@ -271,21 +318,35 @@ export default function Home() {
           context.drawImage(video, 0, 0, canvas.width, canvas.height);
           const subtitle = subtitles.find((s) => video.currentTime >= s.start && video.currentTime < s.end);
           if (subtitle) {
-            const renderFontSize = Math.max(18, Math.round((fontSize / 390) * canvas.width));
-            context.font = `900 ${renderFontSize}px "${fontFamily}", Arial, sans-serif`;
+            const preferredFontSize = Math.max(18, Math.round((fontSize / 390) * canvas.width));
+            const fitted = fitSubtitle(
+              context,
+              subtitle.text,
+              fontFamily,
+              preferredFontSize,
+              canvas.width * 0.84,
+              4,
+            );
+            const renderFontSize = fitted.fontSize;
+            const lines = fitted.lines;
+            context.font = `900 ${renderFontSize}px "${fontFamily}", Tahoma, Arial, sans-serif`;
             context.textAlign = "center";
             context.textBaseline = "middle";
             context.lineJoin = "round";
             context.lineWidth = Math.max(1, (strokeWidth / 390) * canvas.width);
             context.strokeStyle = strokeColor;
             context.fillStyle = textColor;
-            const lines = wrapText(context, subtitle.text, canvas.width * 0.82);
             const lineHeight = renderFontSize * 1.22;
-            const baseY = canvas.height * (subtitlePosition / 100) - ((lines.length - 1) * lineHeight) / 2;
+            const blockHeight = Math.max(lineHeight, lines.length * lineHeight);
+            const safeTop = blockHeight / 2 + canvas.height * 0.04;
+            const safeBottom = canvas.height - blockHeight / 2 - canvas.height * 0.06;
+            const desiredY = canvas.height * (subtitlePosition / 100);
+            const centerY = Math.min(safeBottom, Math.max(safeTop, desiredY));
+            const baseY = centerY - ((lines.length - 1) * lineHeight) / 2;
             lines.forEach((line, index) => {
               const y = baseY + index * lineHeight;
-              context.strokeText(line, canvas.width / 2, y);
-              context.fillText(line, canvas.width / 2, y);
+              context.strokeText(line, canvas.width / 2, y, canvas.width * 0.86);
+              context.fillText(line, canvas.width / 2, y, canvas.width * 0.86);
             });
           }
           setRenderProgress(Math.min(99, Math.round((video.currentTime / Math.max(video.duration, 1)) * 100)));
@@ -295,13 +356,18 @@ export default function Home() {
         video.onended = () => { if (recorder.state === "recording") recorder.stop(); };
       });
 
-      const result = new Blob(chunks, { type: "video/webm" });
+      const extension = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
+      const result = new Blob(chunks, { type: mimeType });
+      if (!result.size) throw new Error("ไฟล์วิดีโอที่สร้างมีขนาด 0 KB กรุณาลองใหม่");
       const url = URL.createObjectURL(result);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${file.name.replace(/\.[^.]+$/, "")}-cake-sub.webm`;
+      a.download = `${file.name.replace(/\.[^.]+$/, "")}-cake-sub.${extension}`;
+      a.style.display = "none";
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setRenderProgress(100);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "สร้างวิดีโอไม่สำเร็จ");
@@ -333,7 +399,7 @@ export default function Home() {
         <div className="video-column">
           <div className="phone-frame">
             {videoUrl ? (
-              <><video ref={videoRef} src={videoUrl} controls onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}/>{active && <div className="subtitle-preview" style={{fontFamily: `"${fontFamily}", Arial, sans-serif`, fontSize: `${fontSize}px`, color: textColor, WebkitTextStroke: `${Math.max(0, strokeWidth / 2)}px ${strokeColor}`, bottom: `${100 - subtitlePosition}%`}}>{active.text}</div>}</>
+              <><video ref={videoRef} src={videoUrl} controls playsInline preload="metadata" onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}/>{active && <div className="subtitle-preview" style={{fontFamily: `"${fontFamily}", Arial, sans-serif`, fontSize: `${fontSize}px`, color: textColor, WebkitTextStroke: `${Math.max(0, strokeWidth / 2)}px ${strokeColor}`, bottom: `${100 - subtitlePosition}%`}}>{active.text}</div>}</>
             ) : (
               <div className="empty-video"><Video size={38}/><b>ยังไม่ได้เลือกคลิป</b><span>รองรับ MP4 และ MOV</span></div>
             )}
@@ -377,7 +443,7 @@ export default function Home() {
             <button className="secondary" disabled={!subtitles.length} onClick={downloadSrt}><Download size={18}/>ดาวน์โหลด SRT</button>
             <button className="primary" disabled={!subtitles.length || rendering} onClick={renderVideo}>{rendering ? <LoaderCircle className="spin"/> : <Film size={18}/>} {rendering ? `กำลังสร้าง ${renderProgress}%` : "สร้างวิดีโอพร้อมซับ"}</button>
           </div>
-          <div className="notice">สร้างวิดีโอด้วย Chrome หรือ Edge บนคอม ไฟล์ผลลัพธ์เป็น WebM และไม่มีลายน้ำ</div>
+          <div className="notice">ระบบจะสร้าง MP4 เมื่อเบราว์เซอร์รองรับ หากเครื่องรองรับเฉพาะ WebM ระบบจะดาวน์โหลดเป็น WebM ซึ่งยังเป็นไฟล์วิดีโอและไม่มีลายน้ำ</div>
         </div>
       </section>
     </main>
